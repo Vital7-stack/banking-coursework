@@ -1,0 +1,12 @@
+{
+  "currency_rates": {
+    "USD": 90.5,
+    "EUR": 98.2,
+    "CNY": 12.3
+  },
+  "stock_prices": [
+    {"stock": "YNDX", "price": 3500.5},
+    {"stock": "SBER", "price": 280.0},
+    {"stock": "GAZP", "price": 165.7}
+  ]
+}
