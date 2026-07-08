@@ -1,37 +1,44 @@
+from typing import Any
 from unittest.mock import patch
 import pandas as pd
+
 from src.views import build_dashboard
+from src.utils import filter_transactions_by_date
 
-@patch("src.views.load_settings")                 # <-- ВАЖНО: патчим в views, а не в utils
-@patch("src.views.normalize_transactions")         # <-- и normalize_transactions тоже в views
-def test_build_dashboard_returns_expected_structure(
-    mock_normalize, mock_load_settings
-):
-    # Настраиваем моки
-    mock_normalize.return_value = [
-        {"date": "2019-03-21", "amount": 100.0, "category": "Переводы", "description": "Перевод"},
-        {"date": "2019-03-21", "amount": 100.0, "category": "Переводы", "description": "Возврат"},
-    ]
-    mock_load_settings.return_value = {
-        "currency_rates": {"USD": 90.5},
-        "stock_prices": [{"stock": "YNDX", "price": 3500.5}]
-    }
 
-    fake_df = pd.DataFrame()
-    # Путь можно передать любой — он не будет использоваться, потому что load_settings замокан в views
-    dashboard = build_dashboard(fake_df, "любой/путь/к/файлу.json")
+@patch("src.views.load_settings", return_value={"currency_rates": {}, "stock_prices": []})
+def test_build_dashboard_filters_by_date_range(_: Any) -> None:
+    df = pd.DataFrame(
+        [
+            {"Дата операции": "2024-01-01", "Сумма операции": 100, "Категория": "Еда", "Описание": ""},
+            {"Дата операции": "2024-01-15", "Сумма операции": 200, "Категория": "Транспорт", "Описание": ""},
+            {"Дата операции": "2024-01-30", "Сумма операции": 300, "Категория": "Еда", "Описание": ""},
+        ]
+    )
+    df["Дата операции"] = pd.to_datetime(df["Дата операции"], dayfirst=False)
 
-    # Проверяем структуру
-    assert "top_5_transactions" in dashboard
-    assert "expenses_by_category" in dashboard
-    assert "currency_rates" in dashboard
-    assert "stock_prices" in dashboard
+    filtered_df = filter_transactions_by_date(df, "2024-01-10", "2024-01-20")
+    result = build_dashboard(filtered_df, "dummy.json")
 
-    top_5 = dashboard["top_5_transactions"]
-    # Проверка дедупликации: не должно быть дублей по (дата, сумма)
-    seen = set()
-    for t in top_5:
-        key = (t["date"], t["amount"])
-        assert key not in seen, f"Обнаружен дубль: {t}"
-        seen.add(key)
+    assert len(result["top_5_transactions"]) == 1
+    assert result["top_5_transactions"][0]["category"] == "Транспорт"
 
+
+@patch(
+    "src.views.load_settings",
+    return_value={"currency_rates": {"USD": 90}, "stock_prices": [{"stock": "YNDX", "price": 3500}]},
+)
+def test_build_dashboard_empty_after_filter(_: Any) -> None:
+    df = pd.DataFrame(
+        [
+            {"Дата операции": "2024-01-01", "Сумма операции": 100, "Категория": "Еда", "Описание": ""},
+        ]
+    )
+    df["Дата операции"] = pd.to_datetime(df["Дата операции"], dayfirst=False)
+
+    filtered_df = filter_transactions_by_date(df, "2024-02-01", "2024-02-28")
+    result = build_dashboard(filtered_df, "dummy.json")
+
+    assert len(result["top_5_transactions"]) == 0
+    assert isinstance(result["expenses_by_category"], dict)
+    assert len(result["expenses_by_category"]) == 0

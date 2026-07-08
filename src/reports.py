@@ -1,68 +1,74 @@
-from collections import defaultdict
-from typing import List, Dict, Any, Tuple, Optional, Callable
-import json
-from functools import wraps
+from typing import List, Dict, Any, Tuple, Optional
 
 
-def log_report(filename: Optional[str] = None) -> Callable:
-    """Декоратор: пишет результат функции-отчёта в JSON-файл."""
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            result = func(*args, **kwargs)
-            default_name = f"report_{func.__name__}.json"
-            target_file = filename if filename else default_name
-            with open(target_file, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            return result
-
-        return wrapper
-
-    return decorator
-
-
-def aggregate_by_category(transactions: List[Dict[str, Any]]) -> Tuple[Dict[str, int], Dict[str, int]]:
+def is_transfer_category(cat: str) -> bool:
     """
-    Агрегирует транзакции по категориям и отдельно выделяет «Переводы» и «Наличные».
-    Возвращает кортеж: (по всем категориям, только переводы и наличные).
+    Определяет, является ли категория переводом.
+
+    Логика для курсовой (прозрачная и простая):
+    1. Приводим к нижнему регистру.
+    2. Если фраза — это "не перевод" или начинается с "не ", считаем, что это НЕ перевод.
+    3. Иначе, если в фразе есть слово "перевод", считаем это переводом.
+       (Используем простой поиск подстроки, чтобы поймать "Перевод между...", "Обычный перевод" и т.д.)
     """
-    by_category: Dict[str, float] = defaultdict(float)
-    transfers_and_cash: Dict[str, float] = defaultdict(float)
+    if not cat:
+        return False
+
+    c = cat.strip().lower()
+
+    # Явно исключаем "Не перевод" и всё, что начинается с "не "
+    if c == "не перевод" or c.startswith("не "):
+        return False
+
+    # Если здесь есть слово "перевод", значит, это перевод
+    # Это поймает: "перевод", "переводы", "Перевод между счетами", "Обычный перевод"
+    return "перевод" in c
+
+
+def aggregate_by_category(
+    transactions: List[Dict[str, Any]],
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    by_cat: Dict[str, float] = {}
+    transfers_total: float = 0.0
 
     for t in transactions:
-        cat = t.get("category")
-        if cat is None:
+        cat_raw: Optional[str] = t.get("category")
+        amount_raw = t.get("amount")
+
+        if cat_raw is None or amount_raw is None:
             continue
 
-        amount_raw = t.get("amount")
-        if amount_raw is None:
-            continue
+        cat = str(cat_raw).strip()
 
         try:
-            amount = float(amount_raw)
+            amount: float = float(amount_raw)
         except (ValueError, TypeError):
             continue
 
-        by_category[cat] += amount
-        if cat in ("Переводы", "Наличные"):
-            transfers_and_cash[cat] += amount
+        # Агрегация по всем категориям
+        by_cat[cat] = by_cat.get(cat, 0.0) + amount
 
-    by_category_int: Dict[str, int] = {k: int(round(v)) for k, v in by_category.items()}
-    transfers_and_cash_int: Dict[str, int] = {k: int(round(v)) for k, v in transfers_and_cash.items()}
+        # Проверка на перевод
+        if is_transfer_category(cat):
+            transfers_total += amount
 
-    return by_category_int, transfers_and_cash_int
+    transfers: Dict[str, float] = {"Переводы": transfers_total}
+    return by_cat, transfers
 
 
-def top_7_with_rest(by_category: Dict[str, int]) -> Dict[str, int]:
-    """
-    Оставляет топ‑7 категорий по сумме, остальное складывает в «Остальное».
-    """
-    sorted_items: List[Tuple[str, int]] = sorted(by_category.items(), key=lambda x: x[1], reverse=True)
-    top_7: Dict[str, int] = dict(sorted_items[:7])
-    rest_sum: int = sum(v for _, v in sorted_items[7:])
+def top_7_with_rest(data: Dict[str, float]) -> Dict[str, float]:
+    sorted_items = sorted(data.items(), key=lambda x: abs(x[1]), reverse=True)
 
-    if rest_sum > 0:
-        top_7["Остальное"] = rest_sum
+    result: Dict[str, float] = {}
+    rest_sum: float = 0.0
 
-    return top_7
+    for i, (cat, amount) in enumerate(sorted_items):
+        if i < 7:
+            result[cat] = amount
+        else:
+            rest_sum += amount
+
+    if rest_sum != 0:
+        result["Остальное"] = rest_sum
+
+    return result
